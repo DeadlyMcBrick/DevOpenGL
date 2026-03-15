@@ -10,10 +10,11 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 
-const unsigned int SCR_WIDTH = 800, SCR_HEIGHT = 600;
+const unsigned int SCR_WIDTH = 1920, SCR_HEIGHT = 1080;
 glm::vec3 cameraPos(0, 0, 3), cameraFront(0, 0, -1), cameraUp(0, 1, 0);
 float deltaTime = 0, lastFrame = 0, yaw = -90, pitch = 0, lastX = 400, lastY = 300;
 bool firstMouse = true;
+bool uiMode = false;
 
 const char* vertSrc = R"(
 #version 330 core
@@ -47,6 +48,7 @@ void main(){
 
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 void mouse_callback(GLFWwindow*, double xpos, double ypos) {
+	if (uiMode)return;
 	if (firstMouse) { lastX = xpos; lastY = ypos; firstMouse = false; }
 	float xo = (xpos - lastX) * 0.1f, yo = (lastY - ypos) * 0.1f;
 	lastX = xpos; lastY = ypos;
@@ -56,7 +58,19 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
 }
 void processInput(GLFWwindow* w) {
 	if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
+	
+	static bool tabPressed = false;
 	float s = 2.5f * deltaTime;
+
+	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
+		uiMode = !uiMode;
+		glfwSetInputMode(w, GLFW_CURSOR, uiMode ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+		firstMouse = true;
+		tabPressed = true;
+	}
+	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_RELEASE) tabPressed = false;
+	if (uiMode) return;
+
 	if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) cameraPos += s * cameraFront;
 	if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) cameraPos -= s * cameraFront;
 	if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
@@ -114,12 +128,13 @@ int main() {
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
 
-	const char* loader;
-	const bool* debug_ignition;
-
 	////ImGui 
+	bool Triangle = true;
+	float Size = 1.0f;
+	float Color[4] = { 0.8f, 0.3f, 0.02f, 1.0f };
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
+	ImGui::GetStyle().ScaleAllSizes(1.5f);
 	ImGuiIO& io = ImGui::GetIO();
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
 	ImGui_ImplOpenGL3_Init();
@@ -133,13 +148,6 @@ int main() {
 		glClearColor(0.1f, 0.1f, 0.1f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glUseProgram(prog);
 
-		ImGui_ImplOpenGL3_NewFrame();
-		ImGui_ImplGlfw_NewFrame();
-		ImGui::NewFrame();
-		ImGui::ShowDemoWindow();
-		ImGui::Render();
-		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
 		glm::mat4 model = glm::rotate(glm::mat4(1), t, glm::vec3(0.5f, 1, 0));
 		glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 		glm::mat4 proj = glm::perspective(glm::radians(45.f), (float)SCR_WIDTH / SCR_HEIGHT, 0.1f, 100.f);
@@ -151,7 +159,21 @@ int main() {
 		glUniform3f(glGetUniformLocation(prog, "lightColor"), 1, 1, 1);
 		glUniform3f(glGetUniformLocation(prog, "objectColor"), 1.f, 0.5f, 0.2f);
 		glBindVertexArray(VAO);
+		if(Triangle)
 		glDrawArrays(GL_TRIANGLES, 0, 36);
+
+		ImGui_ImplOpenGL3_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
+		ImGui::Begin("Color set");
+		ImGui::Checkbox("Pop the triangle", &Triangle);
+		ImGui::SliderFloat("Size", &Size, 0.5f, 2.0f);
+		ImGui::ColorEdit4("Color", Color);
+		ImGui::End();
+
+		ImGui::Render();
+		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
 		glfwSwapBuffers(window); glfwPollEvents();
 	}
 
