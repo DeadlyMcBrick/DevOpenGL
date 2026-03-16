@@ -87,7 +87,7 @@ int main() {
 #ifdef __APPLE__
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-	GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Cube", NULL, NULL);
+	GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Valgut Engine", NULL, NULL);
 	glfwMakeContextCurrent(window);
 	glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 	glfwSetCursorPosCallback(window, mouse_callback);
@@ -122,11 +122,24 @@ int main() {
 		 0.5f, 0.5f, 0.5f, 0, 1, 0, -0.5f, 0.5f, 0.5f, 0, 1, 0, -0.5f, 0.5f,-0.5f, 0, 1, 0,
 	};
 
+	float floorVerts[] = {
+	 5,-0.5f, 5, 0,1,0,  -5,-0.5f, 5, 0,1,0,  -5,-0.5f,-5, 0,1,0,
+	 5,-0.5f, 5, 0,1,0,  -5,-0.5f,-5, 0,1,0,   5,-0.5f,-5, 0,1,0,
+	};
+
 	unsigned int VAO, VBO;
 	glGenVertexArrays(1, &VAO); glGenBuffers(1, &VBO);
 	glBindVertexArray(VAO);
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+
+	unsigned int floorVAO, floorVBO;
+	glGenVertexArrays(1, &floorVAO); glGenBuffers(1, &floorVBO);
+	glBindVertexArray(floorVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, floorVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(floorVerts), floorVerts, GL_STATIC_DRAW);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
 
@@ -137,6 +150,9 @@ int main() {
 	bool useSpecular = true;
 	float specularStrength = 0.5f;
 	int shininess = 32;
+	float lightPos[3] = { 1.2f, 1.0f,2.0f };
+	float floorColor[4] = {0.3f, 0.3f, 0.3f, 1.0f};
+
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGui::GetStyle().ScaleAllSizes(1.5f);
@@ -150,7 +166,7 @@ int main() {
 	while (!glfwWindowShouldClose(window)) {
 		float t = glfwGetTime(); deltaTime = t - lastFrame; lastFrame = t;
 		processInput(window);
-		glClearColor(0.1f, 0.1f, 0.1f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glClearColor(1.f, 1.f, 1.f, 1.f); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glUseProgram(prog);
 
 		glm::mat4 model = glm::scale(glm::rotate(glm::mat4(1), t, glm::vec3(0.5f, 1, 0)), glm::vec3(Size));
@@ -160,7 +176,7 @@ int main() {
 		glUniformMatrix4fv(glGetUniformLocation(prog, "model"), 1, GL_FALSE, glm::value_ptr(model));
 		glUniformMatrix4fv(glGetUniformLocation(prog, "view"), 1, GL_FALSE, glm::value_ptr(view));
 		glUniformMatrix4fv(glGetUniformLocation(prog, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-		glUniform3f(glGetUniformLocation(prog, "lightPos"), 1.2f, 1.f, 2.f);
+		glUniform3fv(glGetUniformLocation(prog, "lightPos"), 1, lightPos);
 		glUniform3f(glGetUniformLocation(prog, "lightColor"), 1, 1, 1);
 		glUniform3f(glGetUniformLocation(prog, "objectColor"), Color[0], Color[1], Color[2]);
 		glUniform3f(glGetUniformLocation(prog, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
@@ -170,14 +186,26 @@ int main() {
 		glBindVertexArray(VAO);
 		if (Triangle) glDrawArrays(GL_TRIANGLES, 0, 36);
 
+		glUniform3f(glGetUniformLocation(prog, "objectColor"), floorColor[0], floorColor[1], floorColor[2]);
+		glUniformMatrix4fv(glGetUniformLocation(prog, "model"), 1, GL_FALSE, glm::value_ptr(glm::mat4(1)));
+		glBindVertexArray(floorVAO);
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
 		ImGui::NewFrame();
-		ImGui::Begin("Color set");
+		ImVec2 panelSize(320, SCR_HEIGHT);
+		ImGui::SetNextWindowPos(ImVec2(SCR_WIDTH - panelSize.x, 0), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(panelSize, ImGuiCond_Always);
+		ImGui::SetNextWindowBgAlpha(0.95f);
+		ImGui::Begin("Custom Tab", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 		ImGui::Checkbox("Pop the triangle", &Triangle);
 		ImGui::SliderFloat("Size", &Size, 0.5f, 2.0f);
 		ImGui::ColorEdit4("Color", Color);
 		ImGui::Separator();
+		ImGui::Text("Floor");
+		ImGui::ColorEdit4("Floor Color", floorColor);
+		ImGui::SliderFloat3("light Pos",lightPos, -5.0f, 5.0f);
 		ImGui::Checkbox("Specular", &useSpecular);
 		if (useSpecular) {
 			ImGui::SliderFloat("Strength", &specularStrength, 0.0f, 1.0f);
@@ -194,5 +222,6 @@ int main() {
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 	glDeleteVertexArrays(1, &VAO); glDeleteBuffers(1, &VBO);
+	glDeleteVertexArrays(1, &floorVAO); glDeleteBuffers(1, &floorVBO);
 	glfwTerminate();
 }
