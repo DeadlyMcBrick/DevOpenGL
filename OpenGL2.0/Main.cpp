@@ -34,21 +34,27 @@ const char* fragSrc = R"(
 in vec3 FragPos;
 in vec3 Normal;
 out vec4 FragColor;
-uniform vec3 lightPos;
-uniform vec3 lightColor;
-uniform vec3 objectColor;
+uniform vec3 lightPos, lightColor, objectColor, viewPos;
+uniform float specularStrength;
+uniform int shininess;
+uniform bool useSpecular;
 void main(){
-    float ambient = 0.2;
     vec3 norm = normalize(Normal);
     vec3 lightDir = normalize(lightPos - FragPos);
     float diff = max(dot(norm, lightDir), 0.0);
-    vec3 result = (ambient + diff) * lightColor * objectColor;
+    vec3 result = (0.2 + diff) * lightColor * objectColor;
+    if(useSpecular){
+        vec3 viewDir = normalize(viewPos - FragPos);
+        vec3 reflectDir = reflect(-lightDir, norm);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        result += specularStrength * spec * lightColor;
+    }
     FragColor = vec4(result, 1.0);
 })";
 
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 void mouse_callback(GLFWwindow*, double xpos, double ypos) {
-	if (uiMode)return;
+	if (uiMode) return;
 	if (firstMouse) { lastX = xpos; lastY = ypos; firstMouse = false; }
 	float xo = (xpos - lastX) * 0.1f, yo = (lastY - ypos) * 0.1f;
 	lastX = xpos; lastY = ypos;
@@ -58,19 +64,15 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
 }
 void processInput(GLFWwindow* w) {
 	if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
-	
 	static bool tabPressed = false;
 	float s = 2.5f * deltaTime;
-
 	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
 		uiMode = !uiMode;
 		glfwSetInputMode(w, GLFW_CURSOR, uiMode ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
-		firstMouse = true;
-		tabPressed = true;
+		firstMouse = true; tabPressed = true;
 	}
 	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_RELEASE) tabPressed = false;
 	if (uiMode) return;
-
 	if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) cameraPos += s * cameraFront;
 	if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) cameraPos -= s * cameraFront;
 	if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
@@ -128,10 +130,13 @@ int main() {
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
 
-	////ImGui 
+	////ImGui
 	bool Triangle = true;
 	float Size = 1.0f;
 	float Color[4] = { 0.8f, 0.3f, 0.02f, 1.0f };
+	bool useSpecular = true;
+	float specularStrength = 0.5f;
+	int shininess = 32;
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGui::GetStyle().ScaleAllSizes(1.5f);
@@ -148,7 +153,7 @@ int main() {
 		glClearColor(0.1f, 0.1f, 0.1f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glUseProgram(prog);
 
-		glm::mat4 model = glm::rotate(glm::mat4(1), t, glm::vec3(0.5f, 1, 0));
+		glm::mat4 model = glm::scale(glm::rotate(glm::mat4(1), t, glm::vec3(0.5f, 1, 0)), glm::vec3(Size));
 		glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 		glm::mat4 proj = glm::perspective(glm::radians(45.f), (float)SCR_WIDTH / SCR_HEIGHT, 0.1f, 100.f);
 
@@ -157,10 +162,13 @@ int main() {
 		glUniformMatrix4fv(glGetUniformLocation(prog, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
 		glUniform3f(glGetUniformLocation(prog, "lightPos"), 1.2f, 1.f, 2.f);
 		glUniform3f(glGetUniformLocation(prog, "lightColor"), 1, 1, 1);
-		glUniform3f(glGetUniformLocation(prog, "objectColor"), 1.f, 0.5f, 0.2f);
+		glUniform3f(glGetUniformLocation(prog, "objectColor"), Color[0], Color[1], Color[2]);
+		glUniform3f(glGetUniformLocation(prog, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+		glUniform1f(glGetUniformLocation(prog, "specularStrength"), specularStrength);
+		glUniform1i(glGetUniformLocation(prog, "shininess"), shininess);
+		glUniform1i(glGetUniformLocation(prog, "useSpecular"), useSpecular);
 		glBindVertexArray(VAO);
-		if(Triangle)
-		glDrawArrays(GL_TRIANGLES, 0, 36);
+		if (Triangle) glDrawArrays(GL_TRIANGLES, 0, 36);
 
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
@@ -169,11 +177,16 @@ int main() {
 		ImGui::Checkbox("Pop the triangle", &Triangle);
 		ImGui::SliderFloat("Size", &Size, 0.5f, 2.0f);
 		ImGui::ColorEdit4("Color", Color);
-		ImGui::End();
+		ImGui::Separator();
+		ImGui::Checkbox("Specular", &useSpecular);
+		if (useSpecular) {
+			ImGui::SliderFloat("Strength", &specularStrength, 0.0f, 1.0f);
+			ImGui::SliderInt("Shininess", &shininess, 2, 256);
+		}
 
+		ImGui::End();
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
 		glfwSwapBuffers(window); glfwPollEvents();
 	}
 
