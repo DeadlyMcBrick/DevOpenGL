@@ -11,7 +11,7 @@
 #include <iostream>
 #include <vector>
 
-const unsigned int SCR_WIDTH = 1920, SCR_HEIGHT = 1080;
+constexpr unsigned SCR_WIDTH = 1920, SCR_HEIGHT = 1080;
 glm::vec3 cameraPos(0, 0, 3), cameraFront(0, 0, -1), cameraUp(0, 1, 0);
 float deltaTime = 0, lastFrame = 0, yaw = -90, pitch = 0, lastX = 400, lastY = 300;
 bool firstMouse = true;
@@ -92,7 +92,11 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
     lastX = xpos; lastY = ypos;
     yaw += xo; pitch += yo;
     pitch = glm::clamp(pitch, -89.f, 89.f);
-    cameraFront = glm::normalize(glm::vec3(cos(glm::radians(yaw)) * cos(glm::radians(pitch)), sin(glm::radians(pitch)), sin(glm::radians(yaw)) * cos(glm::radians(pitch))));
+    cameraFront = glm::normalize(glm::vec3(
+        cos(glm::radians(yaw)) * cos(glm::radians(pitch)),
+        sin(glm::radians(pitch)),
+        sin(glm::radians(yaw)) * cos(glm::radians(pitch))
+    ));
 }
 void processInput(GLFWwindow* w) {
     if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
@@ -110,6 +114,11 @@ void processInput(GLFWwindow* w) {
     if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
     if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
 }
+
+struct Vertex {
+    float x, y, z;
+    float nx, ny, nz;
+};
 
 int main() {
     glfwInit();
@@ -153,19 +162,19 @@ int main() {
     glLinkProgram(gridProg);
     glDeleteShader(gvs); glDeleteShader(gfs);
 
-    float verts[] = {
-        -0.5f,-0.5f,-0.5f, 0, 0,-1,  0.5f,-0.5f,-0.5f, 0, 0,-1,  0.5f, 0.5f,-0.5f, 0, 0,-1,
-         0.5f, 0.5f,-0.5f, 0, 0,-1, -0.5f, 0.5f,-0.5f, 0, 0,-1, -0.5f,-0.5f,-0.5f, 0, 0,-1,
-        -0.5f,-0.5f, 0.5f, 0, 0, 1,  0.5f,-0.5f, 0.5f, 0, 0, 1,  0.5f, 0.5f, 0.5f, 0, 0, 1,
-         0.5f, 0.5f, 0.5f, 0, 0, 1, -0.5f, 0.5f, 0.5f, 0, 0, 1, -0.5f,-0.5f, 0.5f, 0, 0, 1,
-        -0.5f, 0.5f, 0.5f,-1, 0, 0, -0.5f, 0.5f,-0.5f,-1, 0, 0, -0.5f,-0.5f,-0.5f,-1, 0, 0,
-        -0.5f,-0.5f,-0.5f,-1, 0, 0, -0.5f,-0.5f, 0.5f,-1, 0, 0, -0.5f, 0.5f, 0.5f,-1, 0, 0,
-         0.5f, 0.5f, 0.5f, 1, 0, 0,  0.5f, 0.5f,-0.5f, 1, 0, 0,  0.5f,-0.5f,-0.5f, 1, 0, 0,
-         0.5f,-0.5f,-0.5f, 1, 0, 0,  0.5f,-0.5f, 0.5f, 1, 0, 0,  0.5f, 0.5f, 0.5f, 1, 0, 0,
-        -0.5f,-0.5f,-0.5f, 0,-1, 0,  0.5f,-0.5f,-0.5f, 0,-1, 0,  0.5f,-0.5f, 0.5f, 0,-1, 0,
-         0.5f,-0.5f, 0.5f, 0,-1, 0, -0.5f,-0.5f, 0.5f, 0,-1, 0, -0.5f,-0.5f,-0.5f, 0,-1, 0,
-        -0.5f, 0.5f,-0.5f, 0, 1, 0,  0.5f, 0.5f,-0.5f, 0, 1, 0,  0.5f, 0.5f, 0.5f, 0, 1, 0,
-         0.5f, 0.5f, 0.5f, 0, 1, 0, -0.5f, 0.5f, 0.5f, 0, 1, 0, -0.5f, 0.5f,-0.5f, 0, 1, 0,
+    Vertex verts[] = {
+        {-0.5f,-0.5f,-0.5f,  0, 0,-1}, { 0.5f,-0.5f,-0.5f,  0, 0,-1}, { 0.5f, 0.5f,-0.5f,  0, 0,-1},
+        { 0.5f, 0.5f,-0.5f,  0, 0,-1}, {-0.5f, 0.5f,-0.5f,  0, 0,-1}, {-0.5f,-0.5f,-0.5f,  0, 0,-1},
+        {-0.5f,-0.5f, 0.5f,  0, 0, 1}, { 0.5f,-0.5f, 0.5f,  0, 0, 1}, { 0.5f, 0.5f, 0.5f,  0, 0, 1},
+        { 0.5f, 0.5f, 0.5f,  0, 0, 1}, {-0.5f, 0.5f, 0.5f,  0, 0, 1}, {-0.5f,-0.5f, 0.5f,  0, 0, 1},
+        {-0.5f, 0.5f, 0.5f, -1, 0, 0}, {-0.5f, 0.5f,-0.5f, -1, 0, 0}, {-0.5f,-0.5f,-0.5f, -1, 0, 0},
+        {-0.5f,-0.5f,-0.5f, -1, 0, 0}, {-0.5f,-0.5f, 0.5f, -1, 0, 0}, {-0.5f, 0.5f, 0.5f, -1, 0, 0},
+        { 0.5f, 0.5f, 0.5f,  1, 0, 0}, { 0.5f, 0.5f,-0.5f,  1, 0, 0}, { 0.5f,-0.5f,-0.5f,  1, 0, 0},
+        { 0.5f,-0.5f,-0.5f,  1, 0, 0}, { 0.5f,-0.5f, 0.5f,  1, 0, 0}, { 0.5f, 0.5f, 0.5f,  1, 0, 0},
+        {-0.5f,-0.5f,-0.5f,  0,-1, 0}, { 0.5f,-0.5f,-0.5f,  0,-1, 0}, { 0.5f,-0.5f, 0.5f,  0,-1, 0},
+        { 0.5f,-0.5f, 0.5f,  0,-1, 0}, {-0.5f,-0.5f, 0.5f,  0,-1, 0}, {-0.5f,-0.5f,-0.5f,  0,-1, 0},
+        {-0.5f, 0.5f,-0.5f,  0, 1, 0}, { 0.5f, 0.5f,-0.5f,  0, 1, 0}, { 0.5f, 0.5f, 0.5f,  0, 1, 0},
+        { 0.5f, 0.5f, 0.5f,  0, 1, 0}, {-0.5f, 0.5f, 0.5f,  0, 1, 0}, {-0.5f, 0.5f,-0.5f,  0, 1, 0},
     };
 
     unsigned int VAO, VBO;
@@ -173,8 +182,8 @@ int main() {
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, x));  glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, nx)); glEnableVertexAttribArray(1);
 
     std::vector<float> gridVerts;
     int gridSize = 20;
@@ -195,7 +204,6 @@ int main() {
     glBufferData(GL_ARRAY_BUFFER, gridVerts.size() * sizeof(float), gridVerts.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
 
-    ////ImGui
     bool Triangle = true;
     float Size = 1.0f;
     float Color[4] = { 0.8f, 0.3f, 0.02f, 1.0f };
@@ -290,22 +298,10 @@ int main() {
         float treeHeight = SCR_HEIGHT * 0.45f;
         ImGui::BeginChild("SceneTree", ImVec2(0, treeHeight), false);
         if (ImGui::TreeNodeEx("Assets", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (ImGui::TreeNode("Scenes")) {
-                ImGui::Text("  Main.scene");
-                ImGui::TreePop();
-            }
-            if (ImGui::TreeNode("Meshes")) {
-                ImGui::Text("  Cube.obj");
-                ImGui::Text("  Plane.obj");
-                ImGui::TreePop();
-            }
-            if (ImGui::TreeNode("Textures")) {
-                ImGui::Text("  default.png");
-                ImGui::TreePop();
-            }
-            if (ImGui::TreeNode("Shaders")) {
-                ImGui::TreePop();
-            }
+            if (ImGui::TreeNode("Scenes")) { ImGui::Text("  Main.scene"); ImGui::TreePop(); }
+            if (ImGui::TreeNode("Meshes")) { ImGui::Text("  Cube.obj"); ImGui::Text("  Plane.obj"); ImGui::TreePop(); }
+            if (ImGui::TreeNode("Textures")) { ImGui::Text("  default.png"); ImGui::TreePop(); }
+            if (ImGui::TreeNode("Shaders")) { ImGui::TreePop(); }
             ImGui::TreePop();
         }
         ImGui::EndChild();
@@ -314,9 +310,7 @@ int main() {
         ImGui::Separator();
         ImGui::BeginChild("Content", ImVec2(0, 0), false);
         const char* items[] = { "Cube.obj", "Plane.obj", "default.png", "phong.vert", "phong.frag", "Main.scene" };
-        for (auto& item : items) {
-            ImGui::Selectable(item);
-        }
+        for (auto& item : items) ImGui::Selectable(item);
         ImGui::EndChild();
         ImGui::End();
 
