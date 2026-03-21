@@ -22,3 +22,6 @@ Getting the foundations in place — rendering pipeline, camera controls, and a 
 Work in progress. Nothing stable yet.
 
 ![Captura de pantalla 2026-03-16 152352](https://github.com/user-attachments/assets/400e9c87-afcd-438d-94d1-7be343de19c9)
+
+<img width="1917" height="1077" alt="image" src="https://github.com/user-attachments/assets/f0012204-40da-440a-bb7f-044041ca797d" />
+
