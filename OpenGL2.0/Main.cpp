@@ -302,6 +302,12 @@ struct SceneObject {
 	bool showOutline = true;
 	float outlineScale = 0.04f;
 	glm::vec3 outlineColor{ 1.0f, 0.6f, 0.0f };
+	std::string folder = "";
+};
+
+struct SceneFolder {
+	std::string name;
+	bool open = true;
 };
 
 struct PointLightData {
@@ -310,6 +316,11 @@ struct PointLightData {
 	float intensity = 1.0f;
 	float constant = 1.0f, linear = 0.09f, quadratic = 0.032f;
 	bool enabled = true;
+};
+
+struct TerminalLine {
+	std::string text;
+	ImVec4 color;
 };
 
 unsigned int buildVAO(const void* data, size_t size) {
@@ -357,7 +368,7 @@ int pickObject(const std::vector<SceneObject>& objects, glm::vec2 mouseVP, int v
 	float ndcY = -(2.f * mouseVP.y) / vpH + 1.f;
 	glm::vec4 clip(ndcX, ndcY, -1.f, 1.f);
 	glm::vec4 eye = glm::inverse(proj) * clip;
-	eye = glm::vec4(eye.x, eye.y, -1.f, 0.f);
+	eye = glm::vec4(eye.x / eye.w, eye.y / eye.w, -1.f, 0.f);
 	glm::vec3 worldDir = glm::normalize(glm::vec3(glm::inverse(view) * eye));
 
 	int   best = -1;
@@ -408,6 +419,16 @@ int main() {
 		{"Cube_2",  {-3, 0.5f,  1},  {1,1,1}, {0.1f, 0.8f, 0.3f}},
 	};
 	int selectedObject = 0;
+
+	std::vector<SceneFolder> folders;
+	bool showNewFolderPopup = false;
+	char newFolderName[64] = "";
+
+	std::vector<TerminalLine> terminalLines;
+	terminalLines.push_back({ "> Valgut Engine started", {0.4f, 1.0f, 0.4f, 1.0f} });
+	char terminalInput[256] = "";
+	bool terminalScrollToBottom = false;
+	float terminalHeight = 180.f;
 
 	std::vector<PointLightData> pointLights = {
 		{{2,  3, 2},  {1.0f, 0.8f, 0.6f}, 2.0f},
@@ -575,17 +596,33 @@ int main() {
 
 		// Explorer iMGUI
 		ImGui::SetNextWindowPos({ 0, 0 }, ImGuiCond_Always);
-		ImGui::SetNextWindowSize({ 270, (float)SCR_HEIGHT }, ImGuiCond_Always);
+		ImGui::SetNextWindowSize({ 270, (float)SCR_HEIGHT - terminalHeight }, ImGuiCond_Always);
 		ImGui::SetNextWindowBgAlpha(0.95f);
 		ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 		ImGui::Text("Scene");
+		ImGui::SameLine();
+		if (ImGui::SmallButton("+ Folder")) {
+			showNewFolderPopup = true;
+			memset(newFolderName, 0, sizeof(newFolderName));
+		}
 		ImGui::Separator();
-		ImGui::BeginChild("SceneTree", { 0, (float)SCR_HEIGHT * 0.4f }, false);
+		ImGui::BeginChild("SceneTree", { 0, (float)(SCR_HEIGHT - terminalHeight) * 0.4f }, false);
 		if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
+			for (auto& folder : folders) {
+				bool folderOpen = ImGui::TreeNodeEx(folder.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+				if (folderOpen) {
+					for (int i = 0; i < (int)objects.size(); i++) {
+						if (objects[i].folder != folder.name) continue;
+						bool sel = (selectedObject == i);
+						if (ImGui::Selectable(objects[i].name.c_str(), sel)) selectedObject = i;
+					}
+					ImGui::TreePop();
+				}
+			}
 			for (int i = 0; i < (int)objects.size(); i++) {
+				if (!objects[i].folder.empty()) continue;
 				bool sel = (selectedObject == i);
-				if (ImGui::Selectable(objects[i].name.c_str(), sel))
-					selectedObject = i;
+				if (ImGui::Selectable(objects[i].name.c_str(), sel)) selectedObject = i;
 			}
 			ImGui::TreePop();
 		}
@@ -598,6 +635,26 @@ int main() {
 		for (auto& a : assets) ImGui::Selectable(a);
 		ImGui::EndChild();
 		ImGui::End();
+
+		if (showNewFolderPopup) {
+			ImGui::OpenPopup("New Folder");
+			showNewFolderPopup = false;
+		}
+		if (ImGui::BeginPopupModal("New Folder", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::Text("Folder name:");
+			ImGui::SetNextItemWidth(200);
+			ImGui::InputText("##fn", newFolderName, sizeof(newFolderName));
+			if (ImGui::Button("Create") && newFolderName[0] != '\0') {
+				folders.push_back({ std::string(newFolderName) });
+				terminalLines.push_back({ std::string("> Folder created: ") + newFolderName, {0.7f, 0.9f, 1.0f, 1.0f} });
+				terminalScrollToBottom = true;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+
 		ImGui::SetNextWindowPos({ 270, 0 }, ImGuiCond_Always);
 		ImGui::SetNextWindowSize({ (float)SCR_WIDTH - 270 - 330, (float)SCR_HEIGHT }, ImGuiCond_Always);
 		ImGui::SetNextWindowBgAlpha(0.0f);
@@ -622,6 +679,7 @@ int main() {
 		ImGui::TextDisabled("[TAB] Toggle UI  |  WASD Move  |  Mouse Look");
 		ImGui::End();
 		ImGui::PopStyleVar();
+
 		ImGui::SetNextWindowPos({ (float)SCR_WIDTH - 330, 0 }, ImGuiCond_Always);
 		ImGui::SetNextWindowSize({ 330, (float)SCR_HEIGHT }, ImGuiCond_Always);
 		ImGui::SetNextWindowBgAlpha(0.95f);
@@ -640,6 +698,15 @@ int main() {
 			if (obj.showOutline) {
 				ImGui::ColorEdit3("Outline Color", glm::value_ptr(obj.outlineColor));
 				ImGui::SliderFloat("Outline Size", &obj.outlineScale, 0.01f, 0.1f);
+			}
+			ImGui::Separator();
+			ImGui::Text("Folder:");
+			ImGui::SameLine();
+			if (ImGui::BeginCombo("##folder", obj.folder.empty() ? "(none)" : obj.folder.c_str())) {
+				if (ImGui::Selectable("(none)", obj.folder.empty())) obj.folder = "";
+				for (auto& f : folders)
+					if (ImGui::Selectable(f.name.c_str(), obj.folder == f.name)) obj.folder = f.name;
+				ImGui::EndCombo();
 			}
 		}
 
@@ -686,7 +753,28 @@ int main() {
 			ImGui::SliderFloat("Cutoff", &spotCutoff, 1.f, 45.f);
 			ImGui::SliderFloat("Outer", &spotOuterCutoff, spotCutoff, 60.f);
 		}
-		ImGui::End();	
+		ImGui::End();
+
+		ImGui::SetNextWindowPos({ 0, (float)SCR_HEIGHT - terminalHeight }, ImGuiCond_Always);
+		ImGui::SetNextWindowSize({ (float)SCR_WIDTH - 330, terminalHeight }, ImGuiCond_Always);
+		ImGui::SetNextWindowBgAlpha(0.95f);
+		ImGui::Begin("Terminal", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+		ImGui::BeginChild("TerminalScroll", { 0, terminalHeight - 58 }, false, ImGuiWindowFlags_HorizontalScrollbar);
+		for (auto& line : terminalLines)
+			ImGui::TextColored(line.color, "%s", line.text.c_str());
+		if (terminalScrollToBottom) { ImGui::SetScrollHereY(1.0f); terminalScrollToBottom = false; }
+		ImGui::EndChild();
+		ImGui::Separator();
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 60);
+		bool enterPressed = ImGui::InputText("##cmd", terminalInput, sizeof(terminalInput), ImGuiInputTextFlags_EnterReturnsTrue);
+		ImGui::SameLine();
+		if ((ImGui::Button("Run") || enterPressed) && terminalInput[0] != '\0') {
+			terminalLines.push_back({ std::string("> ") + terminalInput, {1.0f, 1.0f, 1.0f, 1.0f} });
+			terminalLines.push_back({ "  Unknown command.", {1.0f, 0.4f, 0.4f, 1.0f} });
+			memset(terminalInput, 0, sizeof(terminalInput));
+			terminalScrollToBottom = true;
+		}
+		ImGui::End();
 
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
