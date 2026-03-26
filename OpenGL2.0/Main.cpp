@@ -209,23 +209,6 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
 	));
 }
 
-void processInput(GLFWwindow* w) {
-	static bool tabPressed = false;
-	if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
-	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
-		uiMode = !uiMode;
-		glfwSetInputMode(w, GLFW_CURSOR, uiMode ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
-		firstMouse = true; tabPressed = true;
-	}
-	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_RELEASE) tabPressed = false;
-	if (uiMode) return;
-	float s = 5.0f * deltaTime;
-	if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) cameraPos += s * cameraFront;
-	if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) cameraPos -= s * cameraFront;
-	if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
-	if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
-}
-
 struct Vertex { float x, y, z, nx, ny, nz; };
 
 Vertex cubeVerts[] = {
@@ -323,6 +306,33 @@ struct TerminalLine {
 	ImVec4 color;
 };
 
+struct Command {
+	int objectIndex;
+	glm::vec3 prevPos, nextPos;
+	glm::vec3 prevScale, nextScale;
+};
+
+std::vector<SceneObject> objects;
+std::vector<Command> undoStack, redoStack;
+
+void applyUndo() {
+	if (undoStack.empty()) return;
+	auto& cmd = undoStack.back();
+	objects[cmd.objectIndex].position = cmd.prevPos;
+	objects[cmd.objectIndex].scale = cmd.prevScale;
+	redoStack.push_back(cmd);
+	undoStack.pop_back();
+}
+
+void applyRedo() {
+	if (redoStack.empty()) return;
+	auto& cmd = redoStack.back();
+	objects[cmd.objectIndex].position = cmd.nextPos;
+	objects[cmd.objectIndex].scale = cmd.nextScale;
+	undoStack.push_back(cmd);
+	redoStack.pop_back();
+}
+
 unsigned int buildVAO(const void* data, size_t size) {
 	unsigned int VAO, VBO;
 	glGenVertexArrays(1, &VAO); glGenBuffers(1, &VBO);
@@ -384,6 +394,31 @@ int pickObject(const std::vector<SceneObject>& objects, glm::vec2 mouseVP, int v
 	return best;
 }
 
+void processInput(GLFWwindow* w) {
+	static bool tabPressed = false, zPressed = false, yPressed = false;
+	if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
+	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
+		uiMode = !uiMode;
+		glfwSetInputMode(w, GLFW_CURSOR, uiMode ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+		firstMouse = true; tabPressed = true;
+	}
+	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_RELEASE) tabPressed = false;
+
+	bool ctrl = glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS
+		|| glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+	if (ctrl && glfwGetKey(w, GLFW_KEY_Z) == GLFW_PRESS && !zPressed) { applyUndo(); zPressed = true; }
+	if (glfwGetKey(w, GLFW_KEY_Z) == GLFW_RELEASE) zPressed = false;
+	if (ctrl && glfwGetKey(w, GLFW_KEY_Y) == GLFW_PRESS && !yPressed) { applyRedo(); yPressed = true; }
+	if (glfwGetKey(w, GLFW_KEY_Y) == GLFW_RELEASE) yPressed = false;
+
+	if (uiMode) return;
+	float s = 5.0f * deltaTime;
+	if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) cameraPos += s * cameraFront;
+	if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) cameraPos -= s * cameraFront;
+	if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
+	if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
+}
+
 int main() {
 	glfwInit();
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -413,7 +448,7 @@ int main() {
 	ShadowMap   shadowMap = createShadowMap();
 	ViewportFBO viewport = createViewportFBO(1280, 720);
 
-	std::vector<SceneObject> objects = {
+	objects = {
 		{"Cube_0",  {0,  0.5f,  0},  {1,1,1}, {0.8f, 0.3f, 0.02f}},
 		{"Cube_1",  {3,  0.5f,  0},  {1,1,1}, {0.2f, 0.5f, 0.9f}},
 		{"Cube_2",  {-3, 0.5f,  1},  {1,1,1}, {0.1f, 0.8f, 0.3f}},
@@ -459,6 +494,8 @@ int main() {
 	ImGui::GetStyle().ScaleAllSizes(1.3f);
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
 	ImGui_ImplOpenGL3_Init();
+
+	glm::vec3 dragStartPos(0), dragStartScale(1);
 
 	while (!glfwWindowShouldClose(window)) {
 		float t = (float)glfwGetTime();
@@ -594,6 +631,8 @@ int main() {
 		ImGui_ImplGlfw_NewFrame();
 		ImGui::NewFrame();
 
+		int folderToDelete = -1;
+
 		// Explorer iMGUI
 		ImGui::SetNextWindowPos({ 0, 0 }, ImGuiCond_Always);
 		ImGui::SetNextWindowSize({ 270, (float)SCR_HEIGHT - terminalHeight }, ImGuiCond_Always);
@@ -608,16 +647,20 @@ int main() {
 		ImGui::Separator();
 		ImGui::BeginChild("SceneTree", { 0, (float)(SCR_HEIGHT - terminalHeight) * 0.4f }, false);
 		if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
-			for (auto& folder : folders) {
-				bool folderOpen = ImGui::TreeNodeEx(folder.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+			for (int fi = 0; fi < (int)folders.size(); fi++) {
+				ImGui::PushID(fi);
+				bool folderOpen = ImGui::TreeNodeEx(folders[fi].name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+				ImGui::SameLine();
+				if (ImGui::SmallButton("x")) folderToDelete = fi;
 				if (folderOpen) {
 					for (int i = 0; i < (int)objects.size(); i++) {
-						if (objects[i].folder != folder.name) continue;
+						if (objects[i].folder != folders[fi].name) continue;
 						bool sel = (selectedObject == i);
 						if (ImGui::Selectable(objects[i].name.c_str(), sel)) selectedObject = i;
 					}
 					ImGui::TreePop();
 				}
+				ImGui::PopID();
 			}
 			for (int i = 0; i < (int)objects.size(); i++) {
 				if (!objects[i].folder.empty()) continue;
@@ -627,6 +670,15 @@ int main() {
 			ImGui::TreePop();
 		}
 		ImGui::EndChild();
+
+		if (folderToDelete >= 0) {
+			for (auto& obj : objects)
+				if (obj.folder == folders[folderToDelete].name) obj.folder = "";
+			terminalLines.push_back({ "> Folder deleted: " + folders[folderToDelete].name, {1.0f, 0.6f, 0.4f, 1.0f} });
+			terminalScrollToBottom = true;
+			folders.erase(folders.begin() + folderToDelete);
+		}
+
 		ImGui::Separator();
 		ImGui::Text("Assets");
 		ImGui::Separator();
@@ -690,8 +742,21 @@ int main() {
 			ImGui::Text("Object: %s", obj.name.c_str());
 			ImGui::Separator();
 			ImGui::Checkbox("Visible", &obj.visible);
+
 			ImGui::DragFloat3("Position", glm::value_ptr(obj.position), 0.05f);
+			if (ImGui::IsItemActivated()) dragStartPos = obj.position;
+			if (ImGui::IsItemDeactivatedAfterEdit() && dragStartPos != obj.position) {
+				undoStack.push_back({ selectedObject, dragStartPos, obj.position, obj.scale, obj.scale });
+				redoStack.clear();
+			}
+
 			ImGui::DragFloat3("Scale", glm::value_ptr(obj.scale), 0.05f, 0.01f, 20.f);
+			if (ImGui::IsItemActivated()) dragStartScale = obj.scale;
+			if (ImGui::IsItemDeactivatedAfterEdit() && dragStartScale != obj.scale) {
+				undoStack.push_back({ selectedObject, obj.position, obj.position, dragStartScale, obj.scale });
+				redoStack.clear();
+			}
+
 			ImGui::ColorEdit3("Color", glm::value_ptr(obj.color));
 			ImGui::Separator();
 			ImGui::Checkbox("Outline", &obj.showOutline);
