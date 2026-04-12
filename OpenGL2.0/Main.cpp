@@ -15,6 +15,9 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <sstream>
+#include <algorithm>
+#include <deque>
 
 constexpr unsigned SCR_WIDTH = 1920, SCR_HEIGHT = 1080;
 constexpr unsigned SHADOW_WIDTH = 2048, SHADOW_HEIGHT = 2048;
@@ -22,6 +25,9 @@ constexpr unsigned SHADOW_WIDTH = 2048, SHADOW_HEIGHT = 2048;
 glm::vec3 cameraPos(0, 3, 8), cameraFront(0, -0.3f, -1), cameraUp(0, 1, 0);
 float deltaTime = 0, lastFrame = 0, yaw = -90, pitch = -10, lastX = SCR_WIDTH / 2.f, lastY = SCR_HEIGHT / 2.f;
 bool firstMouse = true, uiMode = false;
+
+constexpr int FPS_HISTORY = 120;
+std::deque<float> fpsHistory;
 
 std::string openFileDialog() {
 	char buf[512] = {};
@@ -434,6 +440,7 @@ struct SceneObject {
 	bool usePBR = false;
 	float metallic = 0.0f, roughness = 0.5f;
 	PBRMaterial pbr;
+	bool locked = false;
 };
 
 struct SceneFolder { std::string name; bool open = true; };
@@ -453,6 +460,11 @@ struct Command {
 	glm::vec3 prevPos, nextPos;
 	glm::vec3 prevScale, nextScale;
 };
+
+enum class TransformMode { Translate, Rotate, Scale };
+TransformMode transformMode = TransformMode::Translate;
+
+enum class CameraSnap { Free, Top, Front, Right, Iso };
 
 std::vector<SceneObject> objects;
 std::vector<Command> undoStack, redoStack;
@@ -529,8 +541,38 @@ int pickObject(const std::vector<SceneObject>& objs, glm::vec2 mouseVP, int vpW,
 	return best;
 }
 
-void processInput(GLFWwindow* w) {
+void applyCameraSnap(CameraSnap snap) {
+	switch (snap) {
+	case CameraSnap::Top:
+		cameraPos = { 0, 12, 0 };
+		cameraFront = { 0, -1, -0.001f };
+		pitch = -89.f; yaw = -90.f;
+		break;
+	case CameraSnap::Front:
+		cameraPos = { 0, 3, 10 };
+		cameraFront = { 0, 0, -1 };
+		pitch = 0.f; yaw = -90.f;
+		break;
+	case CameraSnap::Right:
+		cameraPos = { 10, 3, 0 };
+		cameraFront = { -1, 0, 0 };
+		pitch = 0.f; yaw = 180.f;
+		break;
+	case CameraSnap::Iso:
+		cameraPos = { 7, 7, 7 };
+		cameraFront = glm::normalize(-cameraPos);
+		pitch = -35.f; yaw = -135.f;
+		break;
+	default: break;
+	}
+	firstMouse = true;
+}
+
+void processInput(GLFWwindow* w, int& selectedObject) {
 	static bool tabPressed = false, zPressed = false, yPressed = false;
+	static bool delPressed = false;
+	static bool f1 = false, f2 = false, f3 = false;
+
 	if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
 	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
 		uiMode = !uiMode;
@@ -538,17 +580,38 @@ void processInput(GLFWwindow* w) {
 		firstMouse = true; tabPressed = true;
 	}
 	if (glfwGetKey(w, GLFW_KEY_TAB) == GLFW_RELEASE) tabPressed = false;
+
 	bool ctrl = glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
 	if (ctrl && glfwGetKey(w, GLFW_KEY_Z) == GLFW_PRESS && !zPressed) { applyUndo(); zPressed = true; }
 	if (glfwGetKey(w, GLFW_KEY_Z) == GLFW_RELEASE) zPressed = false;
 	if (ctrl && glfwGetKey(w, GLFW_KEY_Y) == GLFW_PRESS && !yPressed) { applyRedo(); yPressed = true; }
 	if (glfwGetKey(w, GLFW_KEY_Y) == GLFW_RELEASE) yPressed = false;
+
+	if (glfwGetKey(w, GLFW_KEY_G) == GLFW_PRESS && !f1) { transformMode = TransformMode::Translate; f1 = true; }
+	if (glfwGetKey(w, GLFW_KEY_G) == GLFW_RELEASE) f1 = false;
+	if (glfwGetKey(w, GLFW_KEY_R) == GLFW_PRESS && !f2) { transformMode = TransformMode::Rotate; f2 = true; }
+	if (glfwGetKey(w, GLFW_KEY_R) == GLFW_RELEASE) f2 = false;
+	if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS && !f3) { transformMode = TransformMode::Scale; f3 = true; }
+	if (glfwGetKey(w, GLFW_KEY_S) == GLFW_RELEASE) f3 = false;
+
+	if (glfwGetKey(w, GLFW_KEY_DELETE) == GLFW_PRESS && !delPressed && !uiMode) {
+		if (selectedObject >= 0 && selectedObject < (int)objects.size() && !objects[selectedObject].locked) {
+			objects.erase(objects.begin() + selectedObject);
+			selectedObject = std::max(0, selectedObject - 1);
+		}
+		delPressed = true;
+	}
+	if (glfwGetKey(w, GLFW_KEY_DELETE) == GLFW_RELEASE) delPressed = false;
+
 	if (uiMode) return;
 	float s = 5.0f * deltaTime;
+	if (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) s *= 3.f;
 	if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) cameraPos += s * cameraFront;
 	if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) cameraPos -= s * cameraFront;
 	if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
 	if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * s;
+	if (glfwGetKey(w, GLFW_KEY_Q) == GLFW_PRESS) cameraPos -= cameraUp * s;
+	if (glfwGetKey(w, GLFW_KEY_E) == GLFW_PRESS) cameraPos += cameraUp * s;
 }
 
 void drawTextureSlot(const char* label, unsigned int tex, bool has,
@@ -581,6 +644,204 @@ void drawTextureSlot(const char* label, unsigned int tex, bool has,
 		}
 	}
 	ImGui::PopID();
+}
+
+void drawTransformModeBar() {
+	auto modeBtn = [](const char* label, TransformMode mode, ImVec4 activeCol) {
+		bool active = (transformMode == mode);
+		if (active) ImGui::PushStyleColor(ImGuiCol_Button, activeCol);
+		if (ImGui::Button(label, { 58, 22 })) transformMode = mode;
+		if (active) ImGui::PopStyleColor();
+		ImGui::SameLine(0, 2);
+		};
+	modeBtn("  G Move", TransformMode::Translate, { 0.2f, 0.6f, 0.95f, 1.f });
+	modeBtn("  R Rot", TransformMode::Rotate, { 0.9f, 0.55f, 0.1f, 1.f });
+	modeBtn("  S Scale", TransformMode::Scale, { 0.2f, 0.85f, 0.4f, 1.f });
+}
+
+void drawViewportOverlay(float fps, int objCount, int vpW, int vpH) {
+	ImGui::SetNextWindowBgAlpha(0.55f);
+	ImGui::SetNextWindowPos({ ImGui::GetWindowPos().x + 8, ImGui::GetWindowPos().y + 36 }, ImGuiCond_Always);
+	ImGui::SetNextWindowSize({ 180, 0 }, ImGuiCond_Always);
+	ImGui::Begin("##vpstats", nullptr,
+		ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+		ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+	ImGui::TextColored({ 0.4f, 1.f, 0.5f, 1.f }, "%.1f FPS", fps);
+	ImGui::Text("Objects : %d", objCount);
+	ImGui::Text("Viewport: %dx%d", vpW, vpH);
+	ImGui::Text("Cam: %.1f %.1f %.1f", cameraPos.x, cameraPos.y, cameraPos.z);
+	ImGui::End();
+}
+
+void drawStatsPanel(float fps) {
+	fpsHistory.push_back(fps);
+	while ((int)fpsHistory.size() > FPS_HISTORY) fpsHistory.pop_front();
+
+	std::vector<float> buf(fpsHistory.begin(), fpsHistory.end());
+	float maxFPS = *std::max_element(buf.begin(), buf.end());
+	char overlay[32]; snprintf(overlay, sizeof(overlay), "%.0f fps", fps);
+	ImGui::PlotLines("##fps", buf.data(), (int)buf.size(), 0, overlay, 0.f, maxFPS + 10.f, { ImGui::GetContentRegionAvail().x, 55 });
+	ImGui::Text("Min: %.0f  Max: %.0f  Avg: %.0f",
+		*std::min_element(buf.begin(), buf.end()), maxFPS,
+		[&] { float s = 0; for (auto v : buf) s += v; return s / buf.size(); }());
+}
+
+std::string executeCommand(const std::string& raw, int& selectedObject,
+	std::vector<TerminalLine>& lines, bool& scroll)
+{
+	std::istringstream ss(raw);
+	std::string cmd; ss >> cmd;
+	std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::tolower);
+
+	auto ok = [&](const std::string& msg) { lines.push_back({ "  " + msg, {0.4f,1.f,0.5f,1.f} }); scroll = true; };
+	auto err = [&](const std::string& msg) { lines.push_back({ "  ERROR: " + msg, {1.f,0.35f,0.35f,1.f} }); scroll = true; };
+
+	if (cmd == "help") {
+		ok("Commands: add, remove, select, rename, list, move, scale, color, reset, clear, hide, show, lock, unlock, focus");
+		return "";
+	}
+	if (cmd == "list") {
+		for (int i = 0; i < (int)objects.size(); i++)
+			ok("[" + std::to_string(i) + "] " + objects[i].name + (objects[i].locked ? " (locked)" : ""));
+		return "";
+	}
+	if (cmd == "add") {
+		std::string name; ss >> name;
+		if (name.empty()) name = "Cube_" + std::to_string(objects.size());
+		objects.push_back({ name, {0, 0.5f, 0}, {1,1,1}, {0.5f,0.5f,0.8f} });
+		selectedObject = (int)objects.size() - 1;
+		ok("Added: " + name);
+		return "";
+	}
+	if (cmd == "remove") {
+		int idx = selectedObject;
+		ss >> idx;
+		if (idx < 0 || idx >= (int)objects.size()) { err("Invalid index"); return ""; }
+		if (objects[idx].locked) { err("Object is locked"); return ""; }
+		ok("Removed: " + objects[idx].name);
+		objects.erase(objects.begin() + idx);
+		selectedObject = std::max(0, idx - 1);
+		return "";
+	}
+	if (cmd == "select") {
+		int idx; if (!(ss >> idx)) { err("Usage: select <index>"); return ""; }
+		if (idx < 0 || idx >= (int)objects.size()) { err("Invalid index"); return ""; }
+		selectedObject = idx;
+		ok("Selected: " + objects[idx].name);
+		return "";
+	}
+	if (cmd == "rename") {
+		std::string name; ss >> name;
+		if (name.empty()) { err("Usage: rename <n>"); return ""; }
+		objects[selectedObject].name = name;
+		ok("Renamed to: " + name);
+		return "";
+	}
+	if (cmd == "move") {
+		float x, y, z;
+		if (!(ss >> x >> y >> z)) { err("Usage: move <x> <y> <z>"); return ""; }
+		objects[selectedObject].position = { x, y, z };
+		ok("Moved to " + std::to_string(x) + " " + std::to_string(y) + " " + std::to_string(z));
+		return "";
+	}
+	if (cmd == "scale") {
+		float x, y, z;
+		if (!(ss >> x >> y >> z)) { err("Usage: scale <x> <y> <z>"); return ""; }
+		objects[selectedObject].scale = { x, y, z };
+		ok("Scaled to " + std::to_string(x) + " " + std::to_string(y) + " " + std::to_string(z));
+		return "";
+	}
+	if (cmd == "color") {
+		float r, g, b;
+		if (!(ss >> r >> g >> b)) { err("Usage: color <r> <g> <b>  (0..1)"); return ""; }
+		objects[selectedObject].color = { r, g, b };
+		ok("Color set");
+		return "";
+	}
+	if (cmd == "reset") {
+		objects[selectedObject].position = { 0, 0.5f, 0 };
+		objects[selectedObject].scale = { 1, 1, 1 };
+		ok("Transform reset");
+		return "";
+	}
+	if (cmd == "clear") {
+		lines.clear(); scroll = true;
+		return "";
+	}
+	if (cmd == "hide") {
+		objects[selectedObject].visible = false;
+		ok("Hidden: " + objects[selectedObject].name);
+		return "";
+	}
+	if (cmd == "show") {
+		objects[selectedObject].visible = true;
+		ok("Shown: " + objects[selectedObject].name);
+		return "";
+	}
+	if (cmd == "lock") {
+		objects[selectedObject].locked = true;
+		ok("Locked: " + objects[selectedObject].name);
+		return "";
+	}
+	if (cmd == "unlock") {
+		objects[selectedObject].locked = false;
+		ok("Unlocked: " + objects[selectedObject].name);
+		return "";
+	}
+	if (cmd == "focus") {
+		if (!objects.empty()) {
+			cameraPos = objects[selectedObject].position + glm::vec3(3, 2, 3);
+			cameraFront = glm::normalize(objects[selectedObject].position - cameraPos);
+		}
+		ok("Focused on: " + objects[selectedObject].name);
+		return "";
+	}
+	err("Unknown command '" + cmd + "'. Type 'help' for a list.");
+	return "";
+}
+
+void applyDarkStyle() {
+	ImGuiStyle& s = ImGui::GetStyle();
+	s.WindowRounding = 4.f;
+	s.FrameRounding = 3.f;
+	s.GrabRounding = 3.f;
+	s.ChildRounding = 3.f;
+	s.PopupRounding = 3.f;
+	s.TabRounding = 3.f;
+	s.FramePadding = { 5, 4 };
+	s.ItemSpacing = { 6, 4 };
+	s.WindowPadding = { 8, 8 };
+	s.ScrollbarSize = 10.f;
+	s.GrabMinSize = 8.f;
+	s.WindowBorderSize = 0.f;
+
+	ImVec4* c = s.Colors;
+	c[ImGuiCol_WindowBg] = { 0.10f, 0.11f, 0.14f, 1.f };
+	c[ImGuiCol_ChildBg] = { 0.08f, 0.09f, 0.11f, 1.f };
+	c[ImGuiCol_PopupBg] = { 0.10f, 0.11f, 0.14f, 0.98f };
+	c[ImGuiCol_Header] = { 0.18f, 0.20f, 0.27f, 1.f };
+	c[ImGuiCol_HeaderHovered] = { 0.26f, 0.29f, 0.40f, 1.f };
+	c[ImGuiCol_HeaderActive] = { 0.22f, 0.25f, 0.36f, 1.f };
+	c[ImGuiCol_FrameBg] = { 0.14f, 0.15f, 0.19f, 1.f };
+	c[ImGuiCol_FrameBgHovered] = { 0.18f, 0.20f, 0.27f, 1.f };
+	c[ImGuiCol_FrameBgActive] = { 0.20f, 0.23f, 0.31f, 1.f };
+	c[ImGuiCol_Button] = { 0.18f, 0.20f, 0.28f, 1.f };
+	c[ImGuiCol_ButtonHovered] = { 0.26f, 0.30f, 0.45f, 1.f };
+	c[ImGuiCol_ButtonActive] = { 0.22f, 0.26f, 0.40f, 1.f };
+	c[ImGuiCol_TitleBg] = { 0.07f, 0.08f, 0.10f, 1.f };
+	c[ImGuiCol_TitleBgActive] = { 0.08f, 0.09f, 0.12f, 1.f };
+	c[ImGuiCol_Tab] = { 0.10f, 0.11f, 0.14f, 1.f };
+	c[ImGuiCol_TabHovered] = { 0.26f, 0.30f, 0.45f, 1.f };
+	c[ImGuiCol_TabActive] = { 0.18f, 0.22f, 0.36f, 1.f };
+	c[ImGuiCol_SliderGrab] = { 0.35f, 0.50f, 0.95f, 1.f };
+	c[ImGuiCol_SliderGrabActive] = { 0.50f, 0.65f, 1.00f, 1.f };
+	c[ImGuiCol_CheckMark] = { 0.45f, 0.75f, 1.00f, 1.f };
+	c[ImGuiCol_Separator] = { 0.20f, 0.22f, 0.30f, 1.f };
+	c[ImGuiCol_ScrollbarBg] = { 0.06f, 0.07f, 0.09f, 1.f };
+	c[ImGuiCol_ScrollbarGrab] = { 0.20f, 0.22f, 0.30f, 1.f };
+	c[ImGuiCol_Text] = { 0.88f, 0.89f, 0.92f, 1.f };
+	c[ImGuiCol_TextDisabled] = { 0.40f, 0.42f, 0.50f, 1.f };
 }
 
 int main() {
@@ -626,10 +887,10 @@ int main() {
 	char newFolderName[64] = "";
 
 	std::vector<TerminalLine> terminalLines;
-	terminalLines.push_back({ "> Valgut Engine started", {0.4f, 1.0f, 0.4f, 1.0f} });
+	terminalLines.push_back({ "> Valgut Engine started. Type 'help' for commands.", {0.4f, 1.0f, 0.4f, 1.0f} });
 	char terminalInput[256] = "";
 	bool terminalScrollToBottom = false;
-	float terminalHeight = 180.f;
+	float terminalHeight = 200.f;
 
 	std::vector<PointLightData> pointLights = {
 		{{2,  3,  2}, {1.0f, 0.8f, 0.6f}, 2.0f},
@@ -648,21 +909,26 @@ int main() {
 	float specularStrength = 0.5f;
 	int   shininess = 32;
 	bool  useShadows = true;
-
-	ImVec2 vpScreenPos = { 270, 0 };
+	bool  showStatsPanel = true;
 
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
-	ImGui::GetStyle().ScaleAllSizes(1.3f);
+	ImGui::GetStyle().ScaleAllSizes(1.15f);
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
 	ImGui_ImplOpenGL3_Init();
+	applyDarkStyle();
 
 	glm::vec3 dragStartPos(0), dragStartScale(1);
+
+	std::vector<std::string> cmdHistory;
+	int cmdHistoryIdx = -1;
 
 	while (!glfwWindowShouldClose(window)) {
 		float t = (float)glfwGetTime();
 		deltaTime = t - lastFrame; lastFrame = t;
-		processInput(window);
+		float fps = deltaTime > 0.f ? 1.f / deltaTime : 0.f;
+
+		processInput(window, selectedObject);
 
 		glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 		glm::mat4 proj = glm::perspective(glm::radians(45.f), (float)viewport.width / viewport.height, 0.1f, 200.f);
@@ -805,7 +1071,7 @@ int main() {
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 		glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
-		glClearColor(0.08f, 0.08f, 0.08f, 1.f);
+		glClearColor(0.06f, 0.06f, 0.08f, 1.f);
 		glClear(GL_COLOR_BUFFER_BIT);
 
 		ImGui_ImplOpenGL3_NewFrame();
@@ -814,16 +1080,40 @@ int main() {
 
 		int folderToDelete = -1;
 
-		// Explorer ImGui
 		ImGui::SetNextWindowPos({ 0, 0 }, ImGuiCond_Always);
 		ImGui::SetNextWindowSize({ 270, (float)SCR_HEIGHT - terminalHeight }, ImGuiCond_Always);
-		ImGui::SetNextWindowBgAlpha(0.95f);
+		ImGui::SetNextWindowBgAlpha(0.97f);
 		ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
-		ImGui::Text("Scene");
+
+		if (ImGui::SmallButton("+ Cube")) {
+			objects.push_back({ "Cube_" + std::to_string(objects.size()), {0, 0.5f, 0}, {1,1,1}, {0.6f,0.6f,0.6f} });
+			selectedObject = (int)objects.size() - 1;
+			terminalLines.push_back({ "> Added: " + objects.back().name, {0.4f,1.f,0.5f,1.f} });
+			terminalScrollToBottom = true;
+		}
 		ImGui::SameLine();
 		if (ImGui::SmallButton("+ Folder")) { showNewFolderPopup = true; memset(newFolderName, 0, sizeof(newFolderName)); }
+		ImGui::SameLine();
+		ImGui::TextDisabled("|");
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Stats")) showStatsPanel = !showStatsPanel;
+
 		ImGui::Separator();
-		ImGui::BeginChild("SceneTree", { 0, (float)(SCR_HEIGHT - terminalHeight) * 0.4f }, false);
+
+		if (showStatsPanel) {
+			ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.06f, 0.07f, 0.10f, 1.f));
+			ImGui::BeginChild("StatsInner", { 0, 90 }, true);
+			ImGui::TextColored({ 0.4f, 1.f, 0.5f, 1.f }, "Performance");
+			drawStatsPanel(fps);
+			ImGui::EndChild();
+			ImGui::PopStyleColor();
+			ImGui::Spacing();
+		}
+
+		ImGui::Text("Scene");
+		ImGui::Separator();
+		float treeH = (float)(SCR_HEIGHT - (int)terminalHeight) * (showStatsPanel ? 0.28f : 0.42f);
+		ImGui::BeginChild("SceneTree", { 0, treeH }, false);
 		if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
 			for (int fi = 0; fi < (int)folders.size(); fi++) {
 				ImGui::PushID(fi);
@@ -834,7 +1124,10 @@ int main() {
 					for (int i = 0; i < (int)objects.size(); i++) {
 						if (objects[i].folder != folders[fi].name) continue;
 						bool sel = (selectedObject == i);
-						if (ImGui::Selectable(objects[i].name.c_str(), sel)) selectedObject = i;
+						std::string label = objects[i].name;
+						if (objects[i].locked) label += " [L]";
+						if (!objects[i].visible) label += " [H]";
+						if (ImGui::Selectable(label.c_str(), sel)) selectedObject = i;
 					}
 					ImGui::TreePop();
 				}
@@ -843,7 +1136,10 @@ int main() {
 			for (int i = 0; i < (int)objects.size(); i++) {
 				if (!objects[i].folder.empty()) continue;
 				bool sel = (selectedObject == i);
-				if (ImGui::Selectable(objects[i].name.c_str(), sel)) selectedObject = i;
+				std::string label = objects[i].name;
+				if (objects[i].locked) label += " [L]";
+				if (!objects[i].visible) label += " [H]";
+				if (ImGui::Selectable(label.c_str(), sel)) selectedObject = i;
 			}
 			ImGui::TreePop();
 		}
@@ -888,154 +1184,286 @@ int main() {
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, 0 });
 		ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
 			ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoTitleBar);
-		vpScreenPos = ImGui::GetWindowPos();
 		ImVec2 vpSize = ImGui::GetContentRegionAvail();
 		resizeViewportFBO(viewport, (int)vpSize.x, (int)vpSize.y);
 		ImGui::Image((ImTextureID)(intptr_t)viewport.colorTex, vpSize, { 0,1 }, { 1,0 });
+
 		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 			ImVec2 mp = ImGui::GetMousePos();
 			ImVec2 imgMin = ImGui::GetItemRectMin();
 			int hit = pickObject(objects, { mp.x - imgMin.x, mp.y - imgMin.y }, viewport.width, viewport.height, view, proj);
 			if (hit >= 0) selectedObject = hit;
 		}
+
 		ImGui::SetCursorPos({ 10, 10 });
-		ImGui::TextDisabled("[TAB] Toggle UI  |  WASD Move  |  Mouse Look");
+		ImGui::BeginGroup();
+		drawTransformModeBar();
+		ImGui::SameLine(0, 16);
+		ImGui::TextDisabled("|");
+		ImGui::SameLine(0, 6);
+		if (ImGui::SmallButton("Top"))   applyCameraSnap(CameraSnap::Top);
+		ImGui::SameLine(0, 2);
+		if (ImGui::SmallButton("Front")) applyCameraSnap(CameraSnap::Front);
+		ImGui::SameLine(0, 2);
+		if (ImGui::SmallButton("Right")) applyCameraSnap(CameraSnap::Right);
+		ImGui::SameLine(0, 2);
+		if (ImGui::SmallButton("Iso"))   applyCameraSnap(CameraSnap::Iso);
+		ImGui::SameLine(0, 16);
+		ImGui::TextDisabled("|");
+		ImGui::SameLine(0, 6);
+		if (ImGui::SmallButton(useShadows ? "Shad ON" : "Shad OFF")) useShadows = !useShadows;
+		ImGui::SameLine(0, 6);
+		if (ImGui::SmallButton(useSpotLight ? "Flash ON" : "Flash OFF")) useSpotLight = !useSpotLight;
+		ImGui::EndGroup();
+
+		ImGui::SetCursorPos({ 10, vpSize.y - 22 });
+		ImGui::TextDisabled("[TAB] UI  |  WASD+QE Move  |  Shift: Sprint  |  G/R/S: Mode  |  Del: Delete  |  Ctrl+Z/Y: Undo/Redo");
+
+		drawViewportOverlay(fps, (int)objects.size(), viewport.width, viewport.height);
+
 		ImGui::End();
 		ImGui::PopStyleVar();
 
 		ImGui::SetNextWindowPos({ (float)SCR_WIDTH - 330, 0 }, ImGuiCond_Always);
 		ImGui::SetNextWindowSize({ 330, (float)SCR_HEIGHT }, ImGuiCond_Always);
-		ImGui::SetNextWindowBgAlpha(0.95f);
+		ImGui::SetNextWindowBgAlpha(0.97f);
 		ImGui::Begin("Inspector", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
-		if (selectedObject < (int)objects.size()) {
+		if (selectedObject >= 0 && selectedObject < (int)objects.size()) {
 			auto& obj = objects[selectedObject];
-			ImGui::Text("Object: %s", obj.name.c_str());
-			ImGui::Separator();
-			ImGui::Checkbox("Visible", &obj.visible);
 
-			ImGui::DragFloat3("Position", glm::value_ptr(obj.position), 0.05f);
-			if (ImGui::IsItemActivated()) dragStartPos = obj.position;
-			if (ImGui::IsItemDeactivatedAfterEdit() && dragStartPos != obj.position) {
-				undoStack.push_back({ selectedObject, dragStartPos, obj.position, obj.scale, obj.scale });
-				redoStack.clear();
-			}
+			ImGui::PushStyleColor(ImGuiCol_Text, obj.locked ? ImVec4(1.f, 0.6f, 0.2f, 1.f) : ImVec4(0.88f, 0.89f, 0.92f, 1.f));
+			ImGui::Text("%s  %s", obj.name.c_str(), obj.locked ? "[LOCKED]" : "");
+			ImGui::PopStyleColor();
 
-			ImGui::DragFloat3("Scale", glm::value_ptr(obj.scale), 0.05f, 0.01f, 20.f);
-			if (ImGui::IsItemActivated()) dragStartScale = obj.scale;
-			if (ImGui::IsItemDeactivatedAfterEdit() && dragStartScale != obj.scale) {
-				undoStack.push_back({ selectedObject, obj.position, obj.position, dragStartScale, obj.scale });
-				redoStack.clear();
-			}
+			ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
+			if (ImGui::SmallButton(obj.visible ? "Hide" : "Show"))
+				obj.visible = !obj.visible;
+			ImGui::SameLine(0, 2);
+			if (ImGui::SmallButton(obj.locked ? "Unlock" : "Lock"))
+				obj.locked = !obj.locked;
 
 			ImGui::Separator();
-			ImGui::Checkbox("Outline", &obj.showOutline);
-			if (obj.showOutline) {
-				ImGui::ColorEdit3("Outline Color", glm::value_ptr(obj.outlineColor));
-				ImGui::SliderFloat("Outline Size", &obj.outlineScale, 0.01f, 0.1f);
-			}
 
-			ImGui::Separator();
-			ImGui::Text("Folder:");
-			ImGui::SameLine();
-			if (ImGui::BeginCombo("##folder", obj.folder.empty() ? "(none)" : obj.folder.c_str())) {
-				if (ImGui::Selectable("(none)", obj.folder.empty())) obj.folder = "";
-				for (auto& f : folders)
-					if (ImGui::Selectable(f.name.c_str(), obj.folder == f.name)) obj.folder = f.name;
-				ImGui::EndCombo();
-			}
-
-			ImGui::Separator();
-			ImGui::Text("Material");
-			ImGui::Checkbox("PBR Textures", &obj.usePBR);
-
-			if (!obj.usePBR) {
-				ImGui::ColorEdit3("Color", glm::value_ptr(obj.color));
-				ImGui::SliderFloat("Specular", &specularStrength, 0.f, 1.f);
-				ImGui::SliderInt("Shininess", &shininess, 2, 256);
-				ImGui::SliderFloat("Metallic", &obj.metallic, 0.f, 1.f);
-				ImGui::SliderFloat("Roughness", &obj.roughness, 0.f, 1.f);
+			if (obj.locked) {
+				ImGui::TextDisabled("Pos:   %.2f  %.2f  %.2f", obj.position.x, obj.position.y, obj.position.z);
+				ImGui::TextDisabled("Scale: %.2f  %.2f  %.2f", obj.scale.x, obj.scale.y, obj.scale.z);
 			}
 			else {
-				if (!obj.pbr.hasAlbedo)
-					ImGui::ColorEdit3("Albedo Color", glm::value_ptr(obj.pbrColor));
-				ImGui::SliderFloat("Metallic (base)", &obj.metallic, 0.f, 1.f);
-				ImGui::SliderFloat("Roughness (base)", &obj.roughness, 0.f, 1.f);
-				ImGui::Spacing();
-				ImGui::TextDisabled("Texture maps");
+				ImGui::Text("Transform");
+
+				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.30f, 0.08f, 0.08f, 1.f));
+				ImGui::DragFloat("##px", &obj.position.x, 0.05f); ImGui::SameLine(0, 1);
+				ImGui::PopStyleColor();
+				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.08f, 0.28f, 0.08f, 1.f));
+				ImGui::DragFloat("##py", &obj.position.y, 0.05f); ImGui::SameLine(0, 1);
+				ImGui::PopStyleColor();
+				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.08f, 0.10f, 0.32f, 1.f));
+				ImGui::DragFloat("##pz", &obj.position.z, 0.05f);
+				ImGui::PopStyleColor();
+				ImGui::SameLine(); ImGui::TextDisabled("Pos");
+
+				if (ImGui::IsItemActivated()) dragStartPos = obj.position;
+				if (ImGui::IsItemDeactivatedAfterEdit() && dragStartPos != obj.position) {
+					undoStack.push_back({ selectedObject, dragStartPos, obj.position, obj.scale, obj.scale });
+					redoStack.clear();
+				}
+
+				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.30f, 0.08f, 0.08f, 1.f));
+				ImGui::DragFloat("##sx", &obj.scale.x, 0.05f, 0.01f, 20.f); ImGui::SameLine(0, 1);
+				ImGui::PopStyleColor();
+				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.08f, 0.28f, 0.08f, 1.f));
+				ImGui::DragFloat("##sy", &obj.scale.y, 0.05f, 0.01f, 20.f); ImGui::SameLine(0, 1);
+				ImGui::PopStyleColor();
+				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.08f, 0.10f, 0.32f, 1.f));
+				ImGui::DragFloat("##sz", &obj.scale.z, 0.05f, 0.01f, 20.f);
+				ImGui::PopStyleColor();
+				ImGui::SameLine(); ImGui::TextDisabled("Scale");
+
+				if (ImGui::IsItemActivated()) dragStartScale = obj.scale;
+				if (ImGui::IsItemDeactivatedAfterEdit() && dragStartScale != obj.scale) {
+					undoStack.push_back({ selectedObject, obj.position, obj.position, dragStartScale, obj.scale });
+					redoStack.clear();
+				}
+
+				ImGui::SameLine(0, 8);
+				if (ImGui::SmallButton("Rst")) {
+					obj.position = { 0, 0.5f, 0 };
+					obj.scale = { 1, 1, 1 };
+				}
+
 				ImGui::Separator();
+				ImGui::Checkbox("Outline", &obj.showOutline);
+				if (obj.showOutline) {
+					ImGui::ColorEdit3("Outline Color", glm::value_ptr(obj.outlineColor));
+					ImGui::SliderFloat("Outline Size", &obj.outlineScale, 0.01f, 0.1f);
+				}
 
-				auto slot = [&](const char* label, unsigned int& tex, bool& has, char* path) {
-					drawTextureSlot(label, tex, has, path, 512,
-						[&](const char* p) { obj.pbr.loadMap(tex, has, p); },
-						[&]() { obj.pbr.clearMap(tex, has, path); });
-					};
-				slot("Albedo", obj.pbr.albedo, obj.pbr.hasAlbedo, obj.pbr.pathAlbedo);
-				slot("Normal", obj.pbr.normal, obj.pbr.hasNormal, obj.pbr.pathNormal);
-				slot("Metallic", obj.pbr.metallic, obj.pbr.hasMetallic, obj.pbr.pathMetallic);
-				slot("Roughness", obj.pbr.roughness, obj.pbr.hasRoughness, obj.pbr.pathRoughness);
-				slot("AO", obj.pbr.ao, obj.pbr.hasAO, obj.pbr.pathAO);
+				ImGui::Separator();
+				ImGui::Text("Folder:");
+				ImGui::SameLine();
+				if (ImGui::BeginCombo("##folder", obj.folder.empty() ? "(none)" : obj.folder.c_str())) {
+					if (ImGui::Selectable("(none)", obj.folder.empty())) obj.folder = "";
+					for (auto& f : folders)
+						if (ImGui::Selectable(f.name.c_str(), obj.folder == f.name)) obj.folder = f.name;
+					ImGui::EndCombo();
+				}
+			}
+
+			ImGui::Separator();
+			if (ImGui::BeginTabBar("MatTabs")) {
+				if (ImGui::BeginTabItem("Material")) {
+					ImGui::Checkbox("PBR Textures", &obj.usePBR);
+					if (!obj.usePBR) {
+						ImGui::ColorEdit3("Color", glm::value_ptr(obj.color));
+						ImGui::SliderFloat("Specular", &specularStrength, 0.f, 1.f);
+						ImGui::SliderInt("Shininess", &shininess, 2, 256);
+						ImGui::SliderFloat("Metallic", &obj.metallic, 0.f, 1.f);
+						ImGui::SliderFloat("Roughness", &obj.roughness, 0.f, 1.f);
+
+						ImGui::Spacing();
+						ImGui::TextDisabled("Quick Presets");
+						if (ImGui::SmallButton("Gold")) {
+							obj.color = { 1.0f, 0.76f, 0.33f };
+							obj.metallic = 1.f; obj.roughness = 0.1f; specularStrength = 0.9f;
+						}
+						ImGui::SameLine();
+						if (ImGui::SmallButton("Chrome")) {
+							obj.color = { 0.85f, 0.85f, 0.9f };
+							obj.metallic = 1.f; obj.roughness = 0.05f; specularStrength = 1.f;
+						}
+						ImGui::SameLine();
+						if (ImGui::SmallButton("Rubber")) {
+							obj.color = { 0.05f, 0.05f, 0.05f };
+							obj.metallic = 0.f; obj.roughness = 0.9f; specularStrength = 0.05f;
+						}
+						ImGui::SameLine();
+						if (ImGui::SmallButton("Plastic")) {
+							obj.metallic = 0.f; obj.roughness = 0.4f; specularStrength = 0.5f;
+						}
+					}
+					else {
+						if (!obj.pbr.hasAlbedo)
+							ImGui::ColorEdit3("Albedo Color", glm::value_ptr(obj.pbrColor));
+						ImGui::SliderFloat("Metallic (base)", &obj.metallic, 0.f, 1.f);
+						ImGui::SliderFloat("Roughness (base)", &obj.roughness, 0.f, 1.f);
+						ImGui::Spacing();
+						ImGui::TextDisabled("Texture maps");
+						ImGui::Separator();
+
+						auto slot = [&](const char* label, unsigned int& tex, bool& has, char* path) {
+							drawTextureSlot(label, tex, has, path, 512,
+								[&](const char* p) { obj.pbr.loadMap(tex, has, p); },
+								[&]() { obj.pbr.clearMap(tex, has, path); });
+							};
+						slot("Albedo", obj.pbr.albedo, obj.pbr.hasAlbedo, obj.pbr.pathAlbedo);
+						slot("Normal", obj.pbr.normal, obj.pbr.hasNormal, obj.pbr.pathNormal);
+						slot("Metallic", obj.pbr.metallic, obj.pbr.hasMetallic, obj.pbr.pathMetallic);
+						slot("Roughness", obj.pbr.roughness, obj.pbr.hasRoughness, obj.pbr.pathRoughness);
+						slot("AO", obj.pbr.ao, obj.pbr.hasAO, obj.pbr.pathAO);
+					}
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Info")) {
+					ImGui::TextDisabled("Name:"); ImGui::SameLine(); ImGui::Text("%s", obj.name.c_str());
+					ImGui::TextDisabled("Pos :"); ImGui::SameLine();
+					ImGui::Text("%.2f, %.2f, %.2f", obj.position.x, obj.position.y, obj.position.z);
+					ImGui::TextDisabled("Scl :"); ImGui::SameLine();
+					ImGui::Text("%.2f, %.2f, %.2f", obj.scale.x, obj.scale.y, obj.scale.z);
+					ImGui::TextDisabled("Visible:"); ImGui::SameLine(); ImGui::Text("%s", obj.visible ? "Yes" : "No");
+					ImGui::TextDisabled("Locked:"); ImGui::SameLine(); ImGui::Text("%s", obj.locked ? "Yes" : "No");
+					ImGui::TextDisabled("PBR:"); ImGui::SameLine(); ImGui::Text("%s", obj.usePBR ? "Yes" : "No");
+					ImGui::EndTabItem();
+				}
+				ImGui::EndTabBar();
 			}
 		}
 
 		ImGui::Separator();
-		ImGui::Text("Rendering");
-		if (ImGui::Button(useShadows ? "Shadows: ON " : "Shadows: OFF")) useShadows = !useShadows;
-
-		ImGui::Separator();
-		ImGui::Text("Directional Light");
-		ImGui::DragFloat3("Dir", glm::value_ptr(dirLightDir), 0.01f, -1.f, 1.f);
-		ImGui::ColorEdit3("Dir Color", glm::value_ptr(dirLightColor));
-		ImGui::SliderFloat("Dir Intensity", &dirLightIntensity, 0.f, 3.f);
-
-		ImGui::Separator();
-		ImGui::Text("Point Lights");
-		for (int i = 0; i < (int)pointLights.size(); i++) {
-			ImGui::PushID(i);
-			auto& pl = pointLights[i];
-			if (ImGui::TreeNode(("Point Light " + std::to_string(i)).c_str())) {
-				ImGui::Checkbox("Enabled", &pl.enabled);
-				ImGui::DragFloat3("Position", glm::value_ptr(pl.position), 0.05f);
-				ImGui::ColorEdit3("Color", glm::value_ptr(pl.color));
-				ImGui::SliderFloat("Intensity", &pl.intensity, 0.f, 5.f);
-				ImGui::SliderFloat("Linear", &pl.linear, 0.001f, 1.f);
-				ImGui::SliderFloat("Quadratic", &pl.quadratic, 0.001f, 1.f);
-				ImGui::TreePop();
+		if (ImGui::BeginTabBar("RenderTabs")) {
+			if (ImGui::BeginTabItem("Render")) {
+				if (ImGui::Button(useShadows ? "Shadows: ON " : "Shadows: OFF")) useShadows = !useShadows;
+				ImGui::Separator();
+				ImGui::Text("Directional Light");
+				ImGui::DragFloat3("Dir", glm::value_ptr(dirLightDir), 0.01f, -1.f, 1.f);
+				ImGui::ColorEdit3("Dir Color", glm::value_ptr(dirLightColor));
+				ImGui::SliderFloat("Dir Intensity", &dirLightIntensity, 0.f, 3.f);
+				ImGui::EndTabItem();
 			}
-			ImGui::PopID();
+			if (ImGui::BeginTabItem("Lights")) {
+				ImGui::Text("Point Lights");
+				for (int i = 0; i < (int)pointLights.size(); i++) {
+					ImGui::PushID(i);
+					auto& pl = pointLights[i];
+					ImGui::ColorButton("##lc", { pl.color.r, pl.color.g, pl.color.b, 1.f }, 0, { 12, 12 });
+					ImGui::SameLine();
+					if (ImGui::TreeNode(("Light " + std::to_string(i)).c_str())) {
+						ImGui::Checkbox("Enabled", &pl.enabled);
+						ImGui::DragFloat3("Position", glm::value_ptr(pl.position), 0.05f);
+						ImGui::ColorEdit3("Color", glm::value_ptr(pl.color));
+						ImGui::SliderFloat("Intensity", &pl.intensity, 0.f, 5.f);
+						ImGui::SliderFloat("Linear", &pl.linear, 0.001f, 1.f);
+						ImGui::SliderFloat("Quadratic", &pl.quadratic, 0.001f, 1.f);
+						ImGui::TreePop();
+					}
+					ImGui::PopID();
+				}
+				ImGui::Separator();
+				ImGui::Text("Spot Light");
+				ImGui::Checkbox("Enable Spot", &useSpotLight);
+				if (useSpotLight) {
+					ImGui::ColorEdit3("Spot Color", glm::value_ptr(spotColor));
+					ImGui::SliderFloat("Spot Int", &spotIntensity, 0.f, 5.f);
+					ImGui::SliderFloat("Cutoff", &spotCutoff, 1.f, 45.f);
+					ImGui::SliderFloat("Outer", &spotOuterCutoff, spotCutoff, 60.f);
+				}
+				ImGui::EndTabItem();
+			}
+			ImGui::EndTabBar();
 		}
 
-		ImGui::Separator();
-		ImGui::Text("Spot Light (Flashlight)");
-		ImGui::Checkbox("Enable Spot", &useSpotLight);
-		if (useSpotLight) {
-			ImGui::ColorEdit3("Spot Color", glm::value_ptr(spotColor));
-			ImGui::SliderFloat("Spot Int", &spotIntensity, 0.f, 5.f);
-			ImGui::SliderFloat("Cutoff", &spotCutoff, 1.f, 45.f);
-			ImGui::SliderFloat("Outer", &spotOuterCutoff, spotCutoff, 60.f);
-		}
 		ImGui::End();
 
 		ImGui::SetNextWindowPos({ 0, (float)SCR_HEIGHT - terminalHeight }, ImGuiCond_Always);
 		ImGui::SetNextWindowSize({ (float)SCR_WIDTH - 330, terminalHeight }, ImGuiCond_Always);
-		ImGui::SetNextWindowBgAlpha(0.95f);
+		ImGui::SetNextWindowBgAlpha(0.97f);
 		ImGui::Begin("Terminal", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 		ImGui::BeginChild("TerminalScroll", { 0, terminalHeight - 58 }, false, ImGuiWindowFlags_HorizontalScrollbar);
 		for (auto& line : terminalLines)
 			ImGui::TextColored(line.color, "%s", line.text.c_str());
 		if (terminalScrollToBottom) { ImGui::SetScrollHereY(1.0f); terminalScrollToBottom = false; }
 		ImGui::EndChild();
+
 		ImGui::Separator();
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 60);
+
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
+			if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && !cmdHistory.empty()) {
+				cmdHistoryIdx = std::min(cmdHistoryIdx + 1, (int)cmdHistory.size() - 1);
+				strncpy_s(terminalInput, sizeof(terminalInput), cmdHistory[cmdHistoryIdx].c_str(), sizeof(terminalInput) - 1);
+			}
+			if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+				cmdHistoryIdx = std::max(cmdHistoryIdx - 1, -1);
+				if (cmdHistoryIdx < 0) memset(terminalInput, 0, sizeof(terminalInput));
+				else strncpy_s(terminalInput, sizeof(terminalInput), cmdHistory[cmdHistoryIdx].c_str(), sizeof(terminalInput) - 1);
+			}
+		}
+
 		bool enterPressed = ImGui::InputText("##cmd", terminalInput, sizeof(terminalInput), ImGuiInputTextFlags_EnterReturnsTrue);
 		ImGui::SameLine();
 		if ((ImGui::Button("Run") || enterPressed) && terminalInput[0] != '\0') {
-			terminalLines.push_back({ std::string("> ") + terminalInput, {1.0f, 1.0f, 1.0f, 1.0f} });
-			terminalLines.push_back({ "  Unknown command.", {1.0f, 0.4f, 0.4f, 1.0f} });
+			std::string raw = terminalInput;
+			terminalLines.push_back({ "> " + raw, {0.75f, 0.85f, 1.0f, 1.0f} });
+			cmdHistory.insert(cmdHistory.begin(), raw);
+			if (cmdHistory.size() > 50) cmdHistory.pop_back();
+			cmdHistoryIdx = -1;
+			executeCommand(raw, selectedObject, terminalLines, terminalScrollToBottom);
 			memset(terminalInput, 0, sizeof(terminalInput));
 			terminalScrollToBottom = true;
+			ImGui::SetKeyboardFocusHere(-1);
 		}
 		ImGui::End();
+
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 		glfwSwapBuffers(window);
