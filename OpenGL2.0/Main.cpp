@@ -18,6 +18,7 @@
 #include <sstream>
 #include <algorithm>
 #include <deque>
+#include <fstream>
 
 constexpr unsigned SCR_WIDTH = 1920, SCR_HEIGHT = 1080;
 constexpr unsigned SHADOW_WIDTH = 2048, SHADOW_HEIGHT = 2048;
@@ -38,6 +39,18 @@ std::string openFileDialog() {
 	ofn.nMaxFile = sizeof(buf);
 	ofn.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 	return GetOpenFileNameA(&ofn) ? std::string(buf) : "";
+}
+
+std::string saveFileDialog(const char* filter, const char* defExt) {
+	char buf[512] = {};
+	OPENFILENAMEA ofn{};
+	ofn.lStructSize = sizeof(ofn);
+	ofn.lpstrFilter = filter;
+	ofn.lpstrFile = buf;
+	ofn.nMaxFile = sizeof(buf);
+	ofn.lpstrDefExt = defExt;
+	ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+	return GetSaveFileNameA(&ofn) ? std::string(buf) : "";
 }
 
 const char* pbrVertSrc = R"(
@@ -485,6 +498,103 @@ void applyRedo() {
 	undoStack.push_back(cmd); redoStack.pop_back();
 }
 
+std::string g_currentFilePath = "";
+
+bool saveScene(const std::string& path,
+	const std::vector<SceneObject>& objs,
+	const std::vector<SceneFolder>& folders,
+	const std::vector<PointLightData>& pointLights,
+	glm::vec3 dirLightDir, glm::vec3 dirLightColor, float dirLightIntensity)
+{
+	std::ofstream f(path);
+	if (!f) return false;
+	f << "folders " << folders.size() << "\n";
+	for (auto& fd : folders) f << fd.name << "\n";
+	f << "objects " << objs.size() << "\n";
+	for (auto& o : objs) {
+		f << o.name << "\n";
+		f << o.position.x << " " << o.position.y << " " << o.position.z << "\n";
+		f << o.scale.x << " " << o.scale.y << " " << o.scale.z << "\n";
+		f << o.color.r << " " << o.color.g << " " << o.color.b << "\n";
+		f << o.pbrColor.r << " " << o.pbrColor.g << " " << o.pbrColor.b << "\n";
+		f << (int)o.visible << " " << (int)o.showOutline << " " << o.outlineScale << "\n";
+		f << o.outlineColor.r << " " << o.outlineColor.g << " " << o.outlineColor.b << "\n";
+		f << (o.folder.empty() ? "." : o.folder) << "\n";
+		f << (int)o.usePBR << " " << o.metallic << " " << o.roughness << "\n";
+		f << (int)o.locked << "\n";
+		f << o.pbr.pathAlbedo << "\n" << o.pbr.pathNormal << "\n"
+			<< o.pbr.pathMetallic << "\n" << o.pbr.pathRoughness << "\n" << o.pbr.pathAO << "\n";
+	}
+	f << "pointlights " << pointLights.size() << "\n";
+	for (auto& pl : pointLights) {
+		f << pl.position.x << " " << pl.position.y << " " << pl.position.z << "\n";
+		f << pl.color.r << " " << pl.color.g << " " << pl.color.b << "\n";
+		f << pl.intensity << " " << pl.constant << " " << pl.linear << " " << pl.quadratic << "\n";
+		f << (int)pl.enabled << "\n";
+	}
+	f << "dirlight\n";
+	f << dirLightDir.x << " " << dirLightDir.y << " " << dirLightDir.z << "\n";
+	f << dirLightColor.r << " " << dirLightColor.g << " " << dirLightColor.b << "\n";
+	f << dirLightIntensity << "\n";
+	return true;
+}
+
+bool loadScene(const std::string& path,
+	std::vector<SceneObject>& objs,
+	std::vector<SceneFolder>& folders,
+	std::vector<PointLightData>& pointLights,
+	glm::vec3& dirLightDir, glm::vec3& dirLightColor, float& dirLightIntensity)
+{
+	std::ifstream f(path);
+	if (!f) return false;
+	objs.clear(); folders.clear(); pointLights.clear();
+	std::string tag; int count;
+	f >> tag >> count;
+	folders.resize(count);
+	for (auto& fd : folders) f >> fd.name;
+	f >> tag >> count;
+	objs.resize(count);
+	for (auto& o : objs) {
+		f >> o.name;
+		f >> o.position.x >> o.position.y >> o.position.z;
+		f >> o.scale.x >> o.scale.y >> o.scale.z;
+		f >> o.color.r >> o.color.g >> o.color.b;
+		f >> o.pbrColor.r >> o.pbrColor.g >> o.pbrColor.b;
+		int vis, outl; f >> vis >> outl >> o.outlineScale;
+		o.visible = vis; o.showOutline = outl;
+		f >> o.outlineColor.r >> o.outlineColor.g >> o.outlineColor.b;
+		f >> o.folder; if (o.folder == ".") o.folder = "";
+		int pbr, lk; f >> pbr >> o.metallic >> o.roughness; o.usePBR = pbr;
+		f >> lk; o.locked = lk;
+		std::string pa, pn, pm, pr, pao;
+		f >> pa >> pn >> pm >> pr >> pao;
+		auto loadIfSet = [&](const std::string& p, unsigned int& tex, bool& has, char* buf, size_t sz) {
+			if (!p.empty() && p != ".") {
+				strncpy_s(buf, sz, p.c_str(), sz - 1);
+				tex = loadTexture(p.c_str()); has = true;
+			}
+			};
+		loadIfSet(pa, o.pbr.albedo, o.pbr.hasAlbedo, o.pbr.pathAlbedo, 512);
+		loadIfSet(pn, o.pbr.normal, o.pbr.hasNormal, o.pbr.pathNormal, 512);
+		loadIfSet(pm, o.pbr.metallic, o.pbr.hasMetallic, o.pbr.pathMetallic, 512);
+		loadIfSet(pr, o.pbr.roughness, o.pbr.hasRoughness, o.pbr.pathRoughness, 512);
+		loadIfSet(pao, o.pbr.ao, o.pbr.hasAO, o.pbr.pathAO, 512);
+	}
+	f >> tag >> count;
+	pointLights.resize(count);
+	for (auto& pl : pointLights) {
+		f >> pl.position.x >> pl.position.y >> pl.position.z;
+		f >> pl.color.r >> pl.color.g >> pl.color.b;
+		f >> pl.intensity >> pl.constant >> pl.linear >> pl.quadratic;
+		int en; f >> en; pl.enabled = en;
+	}
+	f >> tag;
+	f >> dirLightDir.x >> dirLightDir.y >> dirLightDir.z;
+	f >> dirLightColor.r >> dirLightColor.g >> dirLightColor.b;
+	f >> dirLightIntensity;
+	return true;
+}
+
 unsigned int buildVAO(const void* data, size_t size) {
 	unsigned int VAO, VBO;
 	glGenVertexArrays(1, &VAO); glGenBuffers(1, &VBO);
@@ -923,12 +1033,42 @@ int main() {
 	std::vector<std::string> cmdHistory;
 	int cmdHistoryIdx = -1;
 
+	auto doSave = [&](const std::string& path) {
+		if (saveScene(path, objects, folders, pointLights, dirLightDir, dirLightColor, dirLightIntensity)) {
+			g_currentFilePath = path;
+			terminalLines.push_back({ "> Saved: " + path, {0.4f,1.f,0.5f,1.f} });
+		}
+		else {
+			terminalLines.push_back({ "> ERROR: Could not save to " + path, {1.f,0.35f,0.35f,1.f} });
+		}
+		terminalScrollToBottom = true;
+		};
+
+	auto doSaveAs = [&]() {
+		std::string path = saveFileDialog("Valgut Scene\0*.vscene\0All\0*.*\0", "vscene");
+		if (!path.empty()) doSave(path);
+		};
+
+	auto doSaveOrPrompt = [&]() {
+		if (g_currentFilePath.empty()) doSaveAs();
+		else doSave(g_currentFilePath);
+		};
+
 	while (!glfwWindowShouldClose(window)) {
 		float t = (float)glfwGetTime();
 		deltaTime = t - lastFrame; lastFrame = t;
 		float fps = deltaTime > 0.f ? 1.f / deltaTime : 0.f;
 
 		processInput(window, selectedObject);
+
+		bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+		bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+		static bool sPressed = false;
+		if (ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !sPressed) {
+			if (shift) doSaveAs(); else doSaveOrPrompt();
+			sPressed = true;
+		}
+		if (glfwGetKey(window, GLFW_KEY_S) == GLFW_RELEASE) sPressed = false;
 
 		glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 		glm::mat4 proj = glm::perspective(glm::radians(45.f), (float)viewport.width / viewport.height, 0.1f, 200.f);
@@ -1097,6 +1237,12 @@ int main() {
 		ImGui::TextDisabled("|");
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Stats")) showStatsPanel = !showStatsPanel;
+		ImGui::SameLine();
+		ImGui::TextDisabled("|");
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Save")) doSaveOrPrompt();
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Save As")) doSaveAs();
 
 		ImGui::Separator();
 
@@ -1108,6 +1254,11 @@ int main() {
 			ImGui::EndChild();
 			ImGui::PopStyleColor();
 			ImGui::Spacing();
+		}
+
+		if (!g_currentFilePath.empty()) {
+			ImGui::TextDisabled("File: %s", g_currentFilePath.c_str());
+			ImGui::Separator();
 		}
 
 		ImGui::Text("Scene");
@@ -1217,7 +1368,7 @@ int main() {
 		ImGui::EndGroup();
 
 		ImGui::SetCursorPos({ 10, vpSize.y - 22 });
-		ImGui::TextDisabled("[TAB] UI  |  WASD+QE Move  |  Shift: Sprint  |  G/R/S: Mode  |  Del: Delete  |  Ctrl+Z/Y: Undo/Redo");
+		ImGui::TextDisabled("[TAB] UI  |  WASD+QE Move  |  Shift: Sprint  |  G/R/S: Mode  |  Del: Delete  |  Ctrl+Z/Y: Undo/Redo  |  Ctrl+S: Save  |  Ctrl+Shift+S: Save As");
 
 		drawViewportOverlay(fps, (int)objects.size(), viewport.width, viewport.height);
 
